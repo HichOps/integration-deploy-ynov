@@ -99,12 +99,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: api/backend/package-lock.json
           
-      - name: Download Node workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: node-workspace
-          path: api/backend/
+      - name: Install Node dependencies
+        run: cd api/backend && npm ci
           
       - name: Initialize Database
         run: cd api/backend && node app/scripts/initDB.js
