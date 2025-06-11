@@ -17,15 +17,15 @@ resource "google_compute_firewall" "default" {
 
   allow {
     protocol = "tcp"
-    ports    = ["22", "3000"] # SSH et API port 3000
+    ports    = ["22", "3000", "5000"] # SSH et API port 3000 et 5000
   }
 
   source_ranges = ["0.0.0.0/0"] # Autorise tout le trafic provenant de n'importe où
 }
 
 # Ressource : Machine virtuelle (VM) pour l'API
-resource "google_compute_instance" "vm_api" {
-  name         = "api-vm"
+resource "google_compute_instance" "vm-tp-filrouge" {
+  name         = "vm-tp-filrouge"
   machine_type = "e2-micro" # Type de machine économique
   zone         = var.zone
 
@@ -46,4 +46,10 @@ resource "google_compute_instance" "vm_api" {
   metadata = {
     ssh-keys = "ubuntu:${file("../.ssh/id_rsa_projet_individuel.pub")}" # Clé publique SSH
   }
+}
+
+# Output : Afficher l'IP externe de la VM
+output "external_ip" {
+  description = "Adresse IP externe de la VM API"
+  value       = google_compute_instance.vm-tp-filrouge.network_interface[0].access_config[0].nat_ip
 }

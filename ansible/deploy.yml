@@ -1,133 +1,318 @@
 ---
-- name: Déployer API Node.js sur VM Ubuntu
-  hosts: api_servers
+- name: Déployer API Node.js sur VM Ubuntu et installer Promtail
+  hosts: all
   become: yes
   vars:
-    api_repo_url: "https://github.com/HichOps/integration-deploy-ynov.git"
-    api_base_dir: "/home/ubuntu/integration-deploy-ynov"
-    backend_dir: "{{ api_base_dir }}/api/backend"
-    node_version_setup_script: "https://deb.nodesource.com/setup_lts.x"
-    sqlite_db_path: "{{ backend_dir }}/database.sqlite"
-
+    app_user: ubuntu
+    app_dir: /home/ubuntu/integration-deploy-ynov
+    repo_url: https://github.com/HichOps/integration-deploy-ynov.git
+    node_version: "18"
+    api_port: 5000
+    
   tasks:
     - name: Mettre à jour la liste des paquets et faire un upgrade
       apt:
         update_cache: yes
         upgrade: dist
+        cache_valid_time: 3600
 
     - name: Installer dépendances de base
       apt:
         name:
           - curl
+          - wget
           - git
           - build-essential
-          - python3-pip
+          - unzip
+          - software-properties-common
+          - ca-certificates
+          - gnupg
+          - lsb-release
         state: present
 
-    - name: Installer Node.js LTS via script officiel
-      shell: curl -fsSL {{ node_version_setup_script }} | bash -
-      args:
-        executable: /bin/bash
-      register: nodejs_setup
-      changed_when: "'deb.nodesource.com' in nodejs_setup.stdout"
+    - name: Ajouter la clé GPG NodeSource
+      apt_key:
+        url: https://deb.nodesource.com/gpgkey/nodesource.gpg.key
+        state: present
 
-    - name: Installer nodejs
+    - name: Ajouter le repository NodeSource pour Node.js {{ node_version }}
+      apt_repository:
+        repo: "deb https://deb.nodesource.com/node_{{ node_version }}.x {{ ansible_distribution_release }} main"
+        state: present
+
+    - name: Mettre à jour le cache apt après ajout du repo NodeSource
+      apt:
+        update_cache: yes
+
+    - name: Installer Node.js
       apt:
         name: nodejs
         state: present
-      when: nodejs_setup.changed
+
+    - name: Vérifier la version de Node.js installée
+      command: node --version
+      register: node_version_check
+      changed_when: false
+
+    - name: Afficher la version de Node.js
+      debug:
+        msg: "Version Node.js installée: {{ node_version_check.stdout }}"
 
     - name: Installer SQLite3
       apt:
         name: sqlite3
         state: present
 
-    - name: Vérifier que le module npm sqlite est installé (si utilisé dans le projet)
-      npm:
-        name: sqlite3
-        path: "{{ backend_dir }}"
-        production: yes
-      become_user: ubuntu
-
-    - name: Installer pm2 globalement via npm
+    - name: Installer PM2 globalement via npm
       npm:
         name: pm2
         global: yes
+        state: present
 
-    - name: Cloner ou mettre à jour le repo API
+    - name: Vérifier si le répertoire de l'application existe
+      stat:
+        path: "{{ app_dir }}"
+      register: app_dir_stat
+
+    - name: Supprimer l'ancien répertoire s'il existe
+      file:
+        path: "{{ app_dir }}"
+        state: absent
+      when: app_dir_stat.stat.exists
+      become_user: "{{ app_user }}"
+
+    - name: Cloner le repository de l'API
       git:
-        repo: "{{ api_repo_url }}"
-        dest: "{{ api_base_dir }}"
-        version: main
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
         force: yes
         update: yes
-        accept_hostkey: yes
-      become_user: ubuntu
+        version: main
+      become_user: "{{ app_user }}"
 
-    - name: "=== Début installation des dépendances Node.js backend ==="
-      debug:
-        msg: "Début installation des dépendances npm"
-
-    - name: Installer les dépendances Node.js backend (avec timeout 5 min)
+    - name: Installer les dépendances npm de l'API
       npm:
-        path: "{{ backend_dir }}"
-        production: yes
-      become_user: ubuntu
-      async: 300
-      poll: 0
-      register: npm_job
+        path: "{{ app_dir }}/api"
+        state: present
+      become_user: "{{ app_user }}"
 
-    - name: "Attendre la fin de l'installation npm"
-      async_status:
-        jid: "{{ npm_job.ansible_job_id }}"
-      register: npm_job_result
-      until: npm_job_result.finished
-      retries: 30
-      delay: 10
+    - name: Créer le répertoire pour les logs de l'application
+      file:
+        path: /var/log/app
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
 
-    - name: "=== Début initialisation de la base SQLite ==="
-      debug:
-        msg: "Début initialisation de la base SQLite avec le script Node.js"
+    - name: Créer un fichier de configuration PM2
+      copy:
+        content: |
+          module.exports = {
+            apps: [{
+              name: 'api-tp-filrouge',
+              script: './api/server.js',
+              cwd: '{{ app_dir }}',
+              instances: 1,
+              autorestart: true,
+              watch: false,
+              max_memory_restart: '1G',
+              env: {
+                NODE_ENV: 'production',
+                PORT: {{ api_port }}
+              },
+              error_file: '/var/log/app/api-error.log',
+              out_file: '/var/log/app/api-out.log',
+              log_file: '/var/log/app/api-combined.log',
+              time: true
+            }]
+          };
+        dest: "{{ app_dir }}/ecosystem.config.js"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0644'
+      become_user: "{{ app_user }}"
 
-    - name: Initialiser la base de données SQLite avec le script Node.js (timeout 1 min)
-      shell: node app/scripts/initDB.js
-      args:
-        chdir: "{{ backend_dir }}"
-      become_user: ubuntu
-      async: 60
-      poll: 0
-      register: initdb_job
-
-    - name: "Attendre la fin du script initDB.js"
-      async_status:
-        jid: "{{ initdb_job.ansible_job_id }}"
-      register: initdb_job_result
-      until: initdb_job_result.finished
-      retries: 12
-      delay: 5
-
-    - name: Vérifier si pm2 a déjà l’API démarrée
-      shell: pm2 describe api
-      register: pm2_api_status
+    - name: Arrêter l'application PM2 existante (si elle existe)
+      command: pm2 stop api-tp-filrouge
+      become_user: "{{ app_user }}"
       ignore_errors: yes
-      become_user: ubuntu
 
-    - name: Redémarrer l'API si déjà démarrée sinon la démarrer
-      shell: |
-        if [[ {{ pm2_api_status.rc }} -eq 0 ]]; then
-          pm2 restart api
-        else
-          pm2 start index.js --name api --cwd "{{ backend_dir }}" --update-env
-        fi
+    - name: Supprimer l'application PM2 existante (si elle existe)
+      command: pm2 delete api-tp-filrouge
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
+
+    - name: Démarrer l'application avec PM2
+      command: pm2 start ecosystem.config.js
       args:
-        executable: /bin/bash
-      become_user: ubuntu
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
 
-    - name: Configurer pm2 pour démarrage automatique au boot
-      shell: |
-        env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
-      become: yes
+    - name: Sauvegarder la configuration PM2
+      command: pm2 save
+      become_user: "{{ app_user }}"
 
-    - name: Sauvegarder la configuration pm2
-      shell: pm2 save
-      become_user: ubuntu
+    - name: Configurer PM2 pour démarrer au boot
+      command: pm2 startup systemd
+      become_user: "{{ app_user }}"
+      register: pm2_startup
+      ignore_errors: yes
+
+    - name: Exécuter la commande de startup PM2 (si nécessaire)
+      shell: "{{ pm2_startup.stdout_lines[-1] }}"
+      when: pm2_startup.stdout_lines is defined and pm2_startup.stdout_lines|length > 0
+      ignore_errors: yes
+
+    # Installation et configuration de Promtail
+    - name: Créer le répertoire pour Promtail
+      file:
+        path: /opt/promtail
+        state: directory
+        mode: '0755'
+
+    - name: Télécharger Promtail
+      get_url:
+        url: https://github.com/grafana/loki/releases/download/v2.9.0/promtail-linux-amd64.zip
+        dest: /tmp/promtail.zip
+        mode: '0644'
+
+    - name: Extraire Promtail
+      unarchive:
+        src: /tmp/promtail.zip
+        dest: /opt/promtail
+        remote_src: yes
+        creates: /opt/promtail/promtail-linux-amd64
+
+    - name: Rendre Promtail exécutable
+      file:
+        path: /opt/promtail/promtail-linux-amd64
+        mode: '0755'
+
+    - name: Créer un lien symbolique pour Promtail
+      file:
+        src: /opt/promtail/promtail-linux-amd64
+        dest: /usr/local/bin/promtail
+        state: link
+
+    - name: Créer le répertoire de configuration Promtail
+      file:
+        path: /etc/promtail
+        state: directory
+        mode: '0755'
+
+    - name: Créer la configuration Promtail
+      copy:
+        content: |
+          server:
+            http_listen_port: 9080
+            grpc_listen_port: 0
+
+          positions:
+            filename: /tmp/positions.yaml
+
+          clients:
+            - url: http://localhost:3100/loki/api/v1/push
+
+          scrape_configs:
+            - job_name: system
+              static_configs:
+                - targets:
+                    - localhost
+                  labels:
+                    job: varlogs
+                    __path__: /var/log/*log
+
+            - job_name: app-logs
+              static_configs:
+                - targets:
+                    - localhost
+                  labels:
+                    job: app
+                    __path__: /var/log/app/*.log
+
+            - job_name: nodejs-app
+              static_configs:
+                - targets:
+                    - localhost
+                  labels:
+                    job: nodejs
+                    app: api-tp-filrouge
+                    __path__: /var/log/app/api-*.log
+        dest: /etc/promtail/config.yml
+        mode: '0644'
+
+    - name: Créer le service systemd pour Promtail
+      copy:
+        content: |
+          [Unit]
+          Description=Promtail service
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/usr/local/bin/promtail -config.file /etc/promtail/config.yml
+          Restart=on-failure
+          RestartSec=20
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=promtail
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/promtail.service
+        mode: '0644'
+
+    - name: Recharger systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Démarrer et activer Promtail
+      systemd:
+        name: promtail
+        state: started
+        enabled: yes
+
+    - name: Vérifier le statut de l'API
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ api_port }}"
+        method: GET
+        timeout: 10
+      register: api_status
+      retries: 5
+      delay: 10
+      ignore_errors: yes
+
+    - name: Afficher le statut de l'API
+      debug:
+        msg: |
+          API Status: {{ api_status.status | default('ERREUR') }}
+          URL de l'API: http://{{ ansible_default_ipv4.address }}:{{ api_port }}
+          Logs de l'application: /var/log/app/
+          Commandes utiles:
+            - pm2 status (vérifier les processus)
+            - pm2 logs api-tp-filrouge (voir les logs)
+            - pm2 restart api-tp-filrouge (redémarrer l'app)
+            - systemctl status promtail (vérifier Promtail)
+
+    - name: Afficher les informations finales
+      debug:
+        msg: |
+          🚀 Déploiement terminé !
+          
+          Application API:
+          - URL: http://{{ ansible_default_ipv4.address }}:{{ api_port }}
+          - Répertoire: {{ app_dir }}
+          - Logs: /var/log/app/
+          
+          Promtail:
+          - Configuration: /etc/promtail/config.yml
+          - Service: systemctl status promtail
+          
+          Commandes utiles:
+          - pm2 status
+          - pm2 logs api-tp-filrouge
+          - pm2 monit
+          
+          Test de l'API:
+          - curl http://{{ ansible_default_ipv4.address }}:{{ api_port }}
