@@ -64,25 +64,47 @@
         accept_hostkey: yes
       become_user: ubuntu
 
-    - name: Installer les dépendances Node.js backend
+    - name: "=== Début installation des dépendances Node.js backend ==="
+      debug:
+        msg: "Début installation des dépendances npm"
+
+    - name: Installer les dépendances Node.js backend (avec timeout 5 min)
       npm:
         path: "{{ backend_dir }}"
         production: yes
       become_user: ubuntu
+      async: 300
+      poll: 0
+      register: npm_job
 
-    - name: Créer le fichier de base de données SQLite s'il n'existe pas
-      file:
-        path: "{{ sqlite_db_path }}"
-        state: touch
-        owner: ubuntu
-        group: ubuntu
-        mode: '0644'
+    - name: "Attendre la fin de l'installation npm"
+      async_status:
+        jid: "{{ npm_job.ansible_job_id }}"
+      register: npm_job_result
+      until: npm_job_result.finished
+      retries: 30
+      delay: 10
 
-    - name: Initialiser la base de données SQLite avec le script Node.js
+    - name: "=== Début initialisation de la base SQLite ==="
+      debug:
+        msg: "Début initialisation de la base SQLite avec le script Node.js"
+
+    - name: Initialiser la base de données SQLite avec le script Node.js (timeout 1 min)
       shell: node app/scripts/initDB.js
       args:
         chdir: "{{ backend_dir }}"
       become_user: ubuntu
+      async: 60
+      poll: 0
+      register: initdb_job
+
+    - name: "Attendre la fin du script initDB.js"
+      async_status:
+        jid: "{{ initdb_job.ansible_job_id }}"
+      register: initdb_job_result
+      until: initdb_job_result.finished
+      retries: 12
+      delay: 5
 
     - name: Vérifier si pm2 a déjà l’API démarrée
       shell: pm2 describe api
