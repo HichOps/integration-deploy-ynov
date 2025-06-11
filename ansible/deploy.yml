@@ -90,11 +90,20 @@
         version: main
       become_user: "{{ app_user }}"
 
+    # CORRECTION: Installer les dépendances dans le bon répertoire
     - name: Installer les dépendances npm de l'API
       npm:
-        path: "{{ app_dir }}/api"
+        path: "{{ app_dir }}/api/backend"
         state: present
       become_user: "{{ app_user }}"
+
+    # AJOUT: Exécuter les migrations de base de données
+    - name: Exécuter les migrations Sequelize
+      command: npx sequelize-cli db:migrate
+      args:
+        chdir: "{{ app_dir }}/api/backend"
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
 
     - name: Créer le répertoire pour les logs de l'application
       file:
@@ -104,13 +113,14 @@
         group: "{{ app_user }}"
         mode: '0755'
 
+    # CORRECTION: Mettre à jour le script de démarrage dans la config PM2
     - name: Créer un fichier de configuration PM2
       copy:
         content: |
           module.exports = {
             apps: [{
               name: 'api-tp-filrouge',
-              script: './api/server.js',
+              script: './api/backend/index.js',
               cwd: '{{ app_dir }}',
               instances: 1,
               autorestart: true,
