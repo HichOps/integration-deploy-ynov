@@ -237,11 +237,11 @@ jobs:
 
   # Job de validation final
   validation:
-  name: Final Validation
-  needs: [test-backend, lint-backend, build-flutter]  # ✅ Sans build-backend
-  runs-on: ubuntu-latest
-  steps:
-    - name: All checks passed
-      run: |
-        echo "✅ Tous les tests, lints et builds ont réussi !"
-        echo "✅ Le code est prêt pour le déploiement"
+    name: Final Validation
+    needs: [test-backend, lint-backend, build-flutter]  # ✅ Sans build-backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks passed
+        run: |
+          echo "✅ Tous les tests, lints et builds ont réussi !"
+          echo "✅ Le code est prêt pour le déploiement"
