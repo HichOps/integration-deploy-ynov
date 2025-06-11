@@ -5,7 +5,7 @@ const port = process.env.PORT;
 
 const startServer = async () => {
   const app = await initApp();
-  app.listen(port, () => {
+  app.listen(port, '0.0.0.0', () => {
     console.log(`Example app listening on port ${port}`);
   });
 };
