@@ -40,7 +40,8 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateMixin {
+class _MyHomePageState extends State<MyHomePage>
+    with SingleTickerProviderStateMixin {
   bool _isLampOn = false;
   // URL de base pour l'API - correction du port pour correspondre au backend
   final String apiUrl = 'http://10.0.2.2:5000/api';
@@ -71,25 +72,25 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
     setState(() {
       _isLoading = true;
     });
-    
+
     try {
       final response = await http.get(Uri.parse('$apiUrl/lamps'));
-      
+
       if (response.statusCode == 200) {
         final List<dynamic> lamps = jsonDecode(response.body);
         if (lamps.isNotEmpty) {
           // On utilise la première lampe trouvée (ou celle avec l'ID spécifié si elle existe)
           final lamp = lamps.firstWhere(
             (lamp) => lamp['id'] == _currentLampId,
-            orElse: () => lamps.first
+            orElse: () => lamps.first,
           );
-          
+
           setState(() {
             _currentLampId = lamp['id'];
             _isLampOn = lamp['state'] == true;
             _serverStatus = "CONNECTÉ";
           });
-          
+
           if (_isLampOn) {
             _animationController.forward();
           } else {
@@ -102,7 +103,10 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
         });
       }
     } catch (e) {
-      developer.log('Erreur lors de la récupération de l\'état de la lampe', error: e);
+      developer.log(
+        'Erreur lors de la récupération de l\'état de la lampe',
+        error: e,
+      );
       setState(() {
         _serverStatus = "NON CONNECTÉ";
       });
@@ -118,19 +122,19 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
     setState(() {
       _isLoading = true;
     });
-    
+
     try {
       final response = await http.put(
         Uri.parse('$apiUrl/lamps/$_currentLampId'),
       );
-      
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
           _isLampOn = data['lamp']['state'] == true;
           _serverStatus = "CONNECTÉ";
         });
-        
+
         if (_isLampOn) {
           _animationController.forward();
         } else {
@@ -152,7 +156,10 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
         }
       }
     } catch (e) {
-      developer.log('Erreur lors de la communication avec le backend', error: e);
+      developer.log(
+        'Erreur lors de la communication avec le backend',
+        error: e,
+      );
       setState(() {
         _serverStatus = "NON CONNECTÉ";
       });
@@ -195,10 +202,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              const Color(0xFF121212),
-              const Color(0xFF1E1E1E),
-            ],
+            colors: [const Color(0xFF121212), const Color(0xFF1E1E1E)],
           ),
         ),
         child: Column(
@@ -217,30 +221,33 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                     width: 180,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      boxShadow: _isLampOn
-                          ? [
-                              BoxShadow(
-                                color: const Color(0xFF6E56F7).withAlpha(77), // 0.3 * 255 = ~77
-                                blurRadius: 30,
-                                spreadRadius: 10,
-                              ),
-                            ]
-                          : [],
+                      boxShadow:
+                          _isLampOn
+                              ? [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFF6E56F7,
+                                  ).withAlpha(77), // 0.3 * 255 = ~77
+                                  blurRadius: 30,
+                                  spreadRadius: 10,
+                                ),
+                              ]
+                              : [],
                     ),
                     child: Icon(
                       Icons.lightbulb_rounded,
                       size: 140,
-                      color: _isLampOn
-                          ? const Color(0xFF6E56F7)
-                          : Colors.grey[800],
+                      color:
+                          _isLampOn
+                              ? const Color(0xFF6E56F7)
+                              : Colors.grey[800],
                     ),
-                  ).animate()
-                   .scale(
-                     duration: 600.ms,
-                     curve: Curves.easeOutBack,
-                     begin: const Offset(0.9, 0.9),
-                     end: const Offset(1.0, 1.0),
-                   );
+                  ).animate().scale(
+                    duration: 600.ms,
+                    curve: Curves.easeOutBack,
+                    begin: const Offset(0.9, 0.9),
+                    end: const Offset(1.0, 1.0),
+                  );
                 },
               ),
             const SizedBox(height: 40),
@@ -251,9 +258,12 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                 color: Colors.black.withAlpha(77), // 0.3 * 255 = ~77
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: _isLampOn
-                      ? const Color(0xFF6E56F7).withAlpha(128) // 0.5 * 255 = ~128
-                      : Colors.grey.withAlpha(51), // 0.2 * 255 = ~51
+                  color:
+                      _isLampOn
+                          ? const Color(0xFF6E56F7).withAlpha(
+                            128,
+                          ) // 0.5 * 255 = ~128
+                          : Colors.grey.withAlpha(51), // 0.2 * 255 = ~51
                   width: 1.5,
                 ),
               ),
@@ -306,16 +316,19 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                       _isLampOn ? const Color(0xFF6E56F7) : Colors.grey[900]!,
                     ],
                   ),
-                  boxShadow: _isLampOn
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF6E56F7).withAlpha(153), // 0.6 * 255 = ~153
-                            blurRadius: 20,
-                            spreadRadius: 2,
-                            offset: const Offset(0, 4),
-                          ),
-                        ]
-                      : [],
+                  boxShadow:
+                      _isLampOn
+                          ? [
+                            BoxShadow(
+                              color: const Color(
+                                0xFF6E56F7,
+                              ).withAlpha(153), // 0.6 * 255 = ~153
+                              blurRadius: 20,
+                              spreadRadius: 2,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                          : [],
                 ),
                 child: Icon(
                   Icons.power_settings_new_rounded,
