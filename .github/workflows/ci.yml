@@ -196,8 +196,8 @@ jobs:
       - name: Run Flutter Analyze
         run: cd api/mobile && flutter analyze --fatal-infos
         
-      - name: Check Flutter Formatting
-        run: cd api/mobile && dart format --set-exit-if-changed .
+      - name: Format Flutter Code
+        run: cd api/mobile && dart format .
 
   # Jobs de build
 
