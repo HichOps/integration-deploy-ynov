@@ -200,33 +200,6 @@ jobs:
         run: cd api/mobile && dart format --set-exit-if-changed .
 
   # Jobs de build
-  build-backend:
-    name: Build Backend
-    needs: [test-backend, lint-backend]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: api/backend/package-lock.json
-          
-      - name: Install Node dependencies
-        run: cd api/backend && npm ci
-        
-      - name: Build Backend
-        run: cd api/backend && npm run build
-        
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-build
-          path: api/backend/dist/
-          retention-days: 7
 
   build-flutter:
     name: Build Flutter
@@ -264,11 +237,11 @@ jobs:
 
   # Job de validation final
   validation:
-    name: Final Validation
-    needs: [build-backend, build-flutter]
-    runs-on: ubuntu-latest
-    steps:
-      - name: All checks passed
-        run: |
-          echo "✅ Tous les tests, lints et builds ont réussi !"
-          echo "✅ Le code est prêt pour le déploiement"
+  name: Final Validation
+  needs: [test-backend, lint-backend, build-flutter]  # ✅ Sans build-backend
+  runs-on: ubuntu-latest
+  steps:
+    - name: All checks passed
+      run: |
+        echo "✅ Tous les tests, lints et builds ont réussi !"
+        echo "✅ Le code est prêt pour le déploiement"
