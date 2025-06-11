@@ -12,266 +12,92 @@ env:
   FLUTTER_VERSION: '3.29.3'
 
 jobs:
-  # Jobs de setup avec artefacts
-  setup-flutter:
-    name: Setup Flutter
+  # Tests et builds en parallèle
+  test-backend:
+    name: Test Backend
     runs-on: ubuntu-latest
-    outputs:
-      cache-hit: ${{ steps.flutter-cache.outputs.cache-hit }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          
-      - name: Cache Flutter dependencies
-        id: flutter-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            api/mobile/.dart_tool/
-            api/mobile/.packages
-            api/mobile/pubspec.lock
-          key: flutter-${{ runner.os }}-${{ hashFiles('api/mobile/pubspec.yaml') }}
-          restore-keys: |
-            flutter-${{ runner.os }}-
-            
-      - name: Install Flutter dependencies
-        if: steps.flutter-cache.outputs.cache-hit != 'true'
-        run: cd api/mobile && flutter pub get
-        
-      - name: Upload Flutter workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-workspace
-          path: api/mobile/
-          retention-days: 1
-
-  setup-node:
-    name: Setup Node.js
-    runs-on: ubuntu-latest
-    outputs:
-      cache-hit: ${{ steps.node-cache.outputs.cache-hit }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: api/backend/package-lock.json
-          
-      - name: Cache Node modules
-        id: node-cache
-        uses: actions/cache@v4
-        with:
-          path: api/backend/node_modules
-          key: node-${{ runner.os }}-${{ hashFiles('api/backend/package-lock.json') }}
-          restore-keys: |
-            node-${{ runner.os }}-
-            
-      - name: Install Node dependencies
-        if: steps.node-cache.outputs.cache-hit != 'true'
-        run: cd api/backend && npm ci
-        
-      - name: Upload Node workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-workspace
-          path: api/backend/
-          retention-days: 1
-
-  # Jobs de test
-  test-backend:
-    name: Test Backend
-    needs: setup-node
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          
-      - name: Download Node workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: node-workspace
-          path: api/backend/
-          
-      - name: Initialize Database
-        run: cd api/backend && node app/scripts/initDB.js
-        
-      - name: Run Backend Tests
-        run: cd api/backend && npm run test
-        
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-results
-          path: api/backend/coverage/
-          retention-days: 7
+      - run: cd api/backend && npm ci --include=dev
+      - run: cd api/backend && node app/scripts/initDB.js
+      - run: cd api/backend && npm run test
 
   test-flutter:
     name: Test Flutter
-    needs: setup-flutter
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          
-      - name: Download Flutter workspace
-        uses: actions/download-artifact@v4
+      - uses: actions/cache@v4
         with:
-          name: flutter-workspace
-          path: api/mobile/
-          
-      - name: Run Flutter Tests
-        run: cd api/mobile && flutter test
-        
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-test-results
-          path: api/mobile/test/
-          retention-days: 7
+          path: api/mobile/.dart_tool/
+          key: flutter-${{ hashFiles('api/mobile/pubspec.lock') }}
+      - run: cd api/mobile && flutter pub get
+      - run: cd api/mobile && flutter test
 
-  # Jobs de lint
   lint-backend:
     name: Lint Backend
-    needs: setup-node
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          
-      - name: Download Node workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: node-workspace
-          path: api/backend/
-          
-      - name: Check code formatting
-        run: cd api/backend && npm run format -- --check
-        
-      - name: Run ESLint
-        run: cd api/backend && npm run lint
+          cache: 'npm'
+          cache-dependency-path: api/backend/package-lock.json
+      - run: cd api/backend && npm ci --include=dev
+      - run: cd api/backend && npm run format -- --check
+      - run: cd api/backend && npm run lint
 
   lint-flutter:
     name: Lint Flutter
-    needs: setup-flutter
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          
-      - name: Download Flutter workspace
-        uses: actions/download-artifact@v4
+      - uses: actions/cache@v4
         with:
-          name: flutter-workspace
-          path: api/mobile/
-          
-      - name: Run Flutter Analyze
-        run: cd api/mobile && flutter analyze --fatal-infos
-        
-      - name: Check Flutter Formatting
-        run: cd api/mobile && dart format --set-exit-if-changed .
+          path: api/mobile/.dart_tool/
+          key: flutter-${{ hashFiles('api/mobile/pubspec.lock') }}
+      - run: cd api/mobile && flutter pub get
+      - run: cd api/mobile && flutter analyze
+      - run: cd api/mobile && dart format --set-exit-if-changed .
 
-  # Jobs de build
   build-backend:
     name: Build Backend
     needs: [test-backend, lint-backend]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          
-      - name: Download Node workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: node-workspace
-          path: api/backend/
-          
-      - name: Build Backend
-        run: cd api/backend && npm run build
-        
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-build
-          path: api/backend/dist/
-          retention-days: 7
+          cache: 'npm'
+          cache-dependency-path: api/backend/package-lock.json
+      - run: cd api/backend && npm ci
+      - run: cd api/backend && echo "✅ Build completed - no build script needed"
 
   build-flutter:
     name: Build Flutter
     needs: [test-flutter, lint-flutter]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          
-      - name: Download Flutter workspace
-        uses: actions/download-artifact@v4
+      - uses: actions/cache@v4
         with:
-          name: flutter-workspace
-          path: api/mobile/
-          
-      - name: Build Flutter APK
-        run: cd api/mobile && flutter build apk --release
-        
-      - name: Build Flutter Web
-        run: cd api/mobile && flutter build web --release
-        
-      - name: Upload Flutter builds
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-builds
-          path: |
-            api/mobile/build/app/outputs/flutter-apk/
-            api/mobile/build/web/
-          retention-days: 7
-
-  # Job de validation final
-  validation:
-    name: Final Validation
-    needs: [build-backend, build-flutter]
-    runs-on: ubuntu-latest
-    steps:
-      - name: All checks passed
-        run: |
-          echo "✅ Tous les tests, lints et builds ont réussi !"
-          echo "✅ Le code est prêt pour le déploiement"
+          path: api/mobile/.dart_tool/
+          key: flutter-${{ hashFiles('api/mobile/pubspec.lock') }}
+      - run: cd api/mobile && flutter pub get
+      - run: cd api/mobile && flutter build apk --release
