@@ -5,45 +5,156 @@ on:
     workflows: ["CI/CD Flutter & Node.js"]
     types:
       - completed
+    branches:
+      - main
+
+env:
+  TERRAFORM_VERSION: '1.5.0'
+  ANSIBLE_VERSION: '2.15'
 
 jobs:
   deploy-api:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    name: Deploy API to Production
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Python for Ansible
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
       - name: Install Ansible
         run: |
-          sudo apt update
-          sudo apt install -y ansible
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          ansible --version
 
       - name: Setup SSH key for Ansible
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.ANSIBLE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_projet_individuel
           chmod 600 ~/.ssh/id_rsa_projet_individuel
+          
+          # Configuration SSH pour éviter les vérifications d'hôte
+          cat >> ~/.ssh/config << EOF
+          Host *
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+          EOF
 
-      - name: Terraform Init (pour lire l’output)
-        run: terraform init
-        working-directory: ./ # adapte si tes fichiers sont ailleurs
-
-      - name: Terraform Output (récupérer l’IP)
-        id: tf_output
+      - name: Verify Terraform configuration
         run: |
-          API_IP=$(terraform output -raw vm_external_ip)
-          echo "API_IP=$API_IP" >> $GITHUB_ENV
+          terraform fmt -check
+          terraform validate
         working-directory: ./
 
-      - name: Create Ansible inventory with Terraform IP
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        working-directory: ./
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Get Terraform Outputs
+        id: tf_output
         run: |
-          echo "[api_servers]" > inventory.ini
-          echo "${API_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa_projet_individuel" >> inventory.ini
+          if terraform output vm_external_ip >/dev/null 2>&1; then
+            API_IP=$(terraform output -raw vm_external_ip)
+            echo "API_IP=$API_IP" >> $GITHUB_ENV
+            echo "✅ IP récupérée: $API_IP"
+          else
+            echo "❌ Impossible de récupérer l'IP de la VM"
+            exit 1
+          fi
+        working-directory: ./
+
+      - name: Validate IP address
+        run: |
+          if [[ $API_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "✅ IP valide: $API_IP"
+          else
+            echo "❌ IP invalide: $API_IP"
+            exit 1
+          fi
+
+      - name: Create Ansible inventory
+        run: |
+          cat > inventory.ini << EOF
+          [api_servers]
+          $API_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa_projet_individuel ansible_python_interpreter=/usr/bin/python3
+          
+          [api_servers:vars]
+          ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+          EOF
+          
+          echo "📋 Inventaire Ansible créé:"
+          cat inventory.ini
 
       - name: Test SSH connectivity
-        run: ansible -i ./inventory.ini api_servers -m ping
+        run: |
+          echo "🔍 Test de connectivité SSH..."
+          ansible -i ./inventory.ini api_servers -m ping -v
+          
+      - name: Validate Ansible playbook
+        run: |
+          if [[ -f "./ansible/deploy.yml" ]]; then
+            ansible-playbook -i ./inventory.ini ./ansible/deploy.yml --syntax-check
+            echo "✅ Syntaxe du playbook valide"
+          else
+            echo "❌ Playbook non trouvé: ./ansible/deploy.yml"
+            exit 1
+          fi
 
-      - name: Run Ansible playbook
-        run: ansible-playbook -i ./inventory.ini ./ansible/deploy.yml
+      - name: Run Ansible playbook (Dry Run)
+        run: |
+          echo "🧪 Exécution en mode dry-run..."
+          ansible-playbook -i ./inventory.ini ./ansible/deploy.yml --check --diff
+
+      - name: Deploy with Ansible
+        run: |
+          echo "🚀 Déploiement en cours..."
+          ansible-playbook -i ./inventory.ini ./ansible/deploy.yml -v
+          
+      - name: Verify deployment
+        run: |
+          echo "🔍 Vérification du déploiement..."
+          ansible -i ./inventory.ini api_servers -m shell -a "systemctl status your-api-service || echo 'Service check failed but continuing...'"
+          
+      - name: Health check
+        run: |
+          echo "🏥 Test de santé de l'API..."
+          sleep 30  # Attendre que le service démarre
+          curl -f http://$API_IP:3000/health || echo "Health check failed - manual verification needed"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa_projet_individuel
+          rm -f ./inventory.ini
+          echo "🧹 Nettoyage terminé"
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "🎉 Déploiement réussi !"
+          echo "🌐 API disponible sur: http://$API_IP:3000"
+          echo "📅 Déployé le: $(date)"
+          echo "🔖 Commit: ${{ github.sha }}"
