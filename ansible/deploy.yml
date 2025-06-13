@@ -5,6 +5,7 @@
   vars:
     app_user: ubuntu
     app_dir: /home/ubuntu/integration-deploy-ynov
+    backup_dir: /home/ubuntu/backup/integration-deploy-ynov
     repo_url: https://github.com/HichOps/integration-deploy-ynov.git
     node_version: "18"
     api_port: 5000 # Assurez-vous que cette variable est bien définie
@@ -72,6 +73,26 @@
         path: "{{ app_dir }}"
       register: app_dir_stat
 
+    - name: Créer le répertoire de backup
+      ansible.builtin.file:
+        path: "{{ backup_dir | dirname }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+      when: app_dir_stat.stat.exists
+
+    - name: Créer une sauvegarde de l'application actuelle
+      ansible.builtin.copy:
+        src: "{{ app_dir }}/"
+        dest: "{{ backup_dir }}/"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: preserve
+        remote_src: yes
+      when: app_dir_stat.stat.exists
+      become_user: "{{ app_user }}"
+
     - name: Supprimer l'ancien répertoire s'il existe (pour un clonage propre)
       ansible.builtin.file:
         path: "{{ app_dir }}"
@@ -79,27 +100,73 @@
       when: app_dir_stat.stat.exists
       # become_user: "{{ app_user }}" # Pas besoin si la tâche parente a déjà become: yes et que l'utilisateur a les droits
 
-    - name: Cloner le repository de l'API
-      ansible.builtin.git:
-        repo: "{{ repo_url }}"
-        dest: "{{ app_dir }}"
-        force: yes # Force le clonage, utile si le répertoire n'est pas vide pour une raison quelconque
-        update: yes # Pull les derniers changements si le repo existe déjà (ne sera pas le cas avec la suppression ci-dessus)
-        version: main
-      become_user: "{{ app_user }}"
+    - name: Bloc de déploiement avec gestion d'erreur
+      block:
+        - name: Cloner le repository de l'API
+          ansible.builtin.git:
+            repo: "{{ repo_url }}"
+            dest: "{{ app_dir }}"
+            force: yes # Force le clonage, utile si le répertoire n'est pas vide pour une raison quelconque
+            update: yes # Pull les derniers changements si le repo existe déjà (ne sera pas le cas avec la suppression ci-dessus)
+            version: main
+          become_user: "{{ app_user }}"
 
-    - name: Installer les dépendances npm de l'API
-      ansible.builtin.npm:
-        path: "{{ app_dir }}/api/backend" # Assurez-vous que c'est le bon chemin vers package.json
-        state: present
-      become_user: "{{ app_user }}"
+        - name: Installer les dépendances npm de l'API
+          ansible.builtin.npm:
+            path: "{{ app_dir }}/api/backend" # Assurez-vous que c'est le bon chemin vers package.json
+            state: present
+          become_user: "{{ app_user }}"
 
-    - name: Exécuter les migrations Sequelize
-      ansible.builtin.command: npx sequelize-cli db:migrate
-      args:
-        chdir: "{{ app_dir }}/api/backend"
-      become_user: "{{ app_user }}"
-      # ignore_errors: yes # Soyez prudent avec cela en production, gérez les erreurs de migration
+        - name: Exécuter les migrations Sequelize
+          ansible.builtin.command: npx sequelize-cli db:migrate
+          args:
+            chdir: "{{ app_dir }}/api/backend"
+          become_user: "{{ app_user }}"
+          # ignore_errors: yes # Soyez prudent avec cela en production, gérez les erreurs de migration
+      rescue:
+        - name: Erreur détectée - Début du rollback automatique
+          ansible.builtin.debug:
+            msg: "❌ Erreur lors du déploiement. Démarrage du rollback automatique..."
+
+        - name: Vérifier que le backup existe pour le rollback
+          ansible.builtin.stat:
+            path: "{{ backup_dir }}"
+          register: backup_exists_rescue
+
+        - name: Rollback - Supprimer le déploiement échoué
+          ansible.builtin.file:
+            path: "{{ app_dir }}"
+            state: absent
+          when: backup_exists_rescue.stat.exists
+
+        - name: Rollback - Restaurer la version précédente
+          ansible.builtin.copy:
+            src: "{{ backup_dir }}/"
+            dest: "{{ app_dir }}/"
+            owner: "{{ app_user }}"
+            group: "{{ app_user }}"
+            mode: preserve
+            remote_src: yes
+          when: backup_exists_rescue.stat.exists
+          become_user: "{{ app_user }}"
+
+        - name: Rollback - Redémarrer l'ancienne version avec PM2
+          ansible.builtin.command: pm2 startOrRestart {{ pm2_ecosystem_file_dest }}
+          become_user: "{{ app_user }}"
+          environment:
+            HOME: "/home/{{ app_user }}"
+            PM2_HOME: "/home/{{ app_user }}/.pm2"
+          when: backup_exists_rescue.stat.exists
+
+        - name: Échec du déploiement - Rollback terminé
+          ansible.builtin.fail:
+            msg: "🔄 Déploiement échoué. Rollback effectué vers la version précédente."
+          when: backup_exists_rescue.stat.exists
+
+        - name: Échec du déploiement - Aucun backup disponible
+          ansible.builtin.fail:
+            msg: "❌ Déploiement échoué et aucun backup disponible pour le rollback."
+          when: not backup_exists_rescue.stat.exists
 
     # --- MODIFICATIONS POUR PM2 ---
     - name: Créer le répertoire pour les logs de l'application PM2 (si ecosystem file les utilise)
@@ -120,14 +187,48 @@
         mode: '0644'
       become_user: "{{ app_user }}" # Copier en tant qu'utilisateur de l'application
 
-    - name: Démarrer ou redémarrer l'application backend avec PM2 via ecosystem file
-      ansible.builtin.command: pm2 startOrRestart {{ pm2_ecosystem_file_dest }} # Utilise le fichier copié
-      become_user: "{{ app_user }}"
-      environment: # PM2 a parfois besoin de HOME pour trouver son répertoire .pm2
-        HOME: "/home/{{ app_user }}"
-        PM2_HOME: "/home/{{ app_user }}/.pm2" # Explicitement définir PM2_HOME peut aider
-      # Vous pouvez ajouter --env production ici si votre ecosystem file a des sections env_production
-      # command: pm2 startOrRestart {{ pm2_ecosystem_file_dest }} --env production
+    - name: Bloc de démarrage PM2 avec gestion d'erreur
+      block:
+        - name: Démarrer ou redémarrer l'application backend avec PM2 via ecosystem file
+          ansible.builtin.command: pm2 startOrRestart {{ pm2_ecosystem_file_dest }} # Utilise le fichier copié
+          become_user: "{{ app_user }}"
+          environment: # PM2 a parfois besoin de HOME pour trouver son répertoire .pm2
+            HOME: "/home/{{ app_user }}"
+            PM2_HOME: "/home/{{ app_user }}/.pm2" # Explicitement définir PM2_HOME peut aider
+          # Vous pouvez ajouter --env production ici si votre ecosystem file a des sections env_production
+          # command: pm2 startOrRestart {{ pm2_ecosystem_file_dest }} --env production
+      rescue:
+        - name: Erreur PM2 détectée - Début du rollback
+          ansible.builtin.debug:
+            msg: "❌ Erreur lors du démarrage PM2. Démarrage du rollback..."
+
+        - name: Vérifier le backup pour rollback PM2
+          ansible.builtin.stat:
+            path: "{{ backup_dir }}"
+          register: backup_exists_pm2
+
+        - name: Rollback PM2 - Restaurer l'ancienne version
+          ansible.builtin.copy:
+            src: "{{ backup_dir }}/"
+            dest: "{{ app_dir }}/"
+            owner: "{{ app_user }}"
+            group: "{{ app_user }}"
+            mode: preserve
+            remote_src: yes
+          when: backup_exists_pm2.stat.exists
+          become_user: "{{ app_user }}"
+
+        - name: Rollback PM2 - Redémarrer l'ancienne version
+          ansible.builtin.command: pm2 startOrRestart {{ pm2_ecosystem_file_dest }}
+          become_user: "{{ app_user }}"
+          environment:
+            HOME: "/home/{{ app_user }}"
+            PM2_HOME: "/home/{{ app_user }}/.pm2"
+          when: backup_exists_pm2.stat.exists
+
+        - name: Échec PM2 - Rollback terminé
+          ansible.builtin.fail:
+            msg: "🔄 Erreur PM2. Rollback effectué vers la version précédente."
 
     - name: Sauvegarder la configuration PM2 pour un redémarrage automatique au boot
       ansible.builtin.command: pm2 save
